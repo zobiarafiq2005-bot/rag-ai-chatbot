@@ -22,6 +22,8 @@ natural-language response.
 
 ## System Architecture
 
+![System Architecture](diagrams/project_architecture.png)
+
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌───────────────┐
 │  Document   │────▶│  Document Loader  │────▶│  Text Chunker  │
@@ -68,6 +70,8 @@ natural-language response.
 
 ## Flow Diagram
 
+![Flow Diagram](diagrams/project_flow.png)
+
 **Ingestion flow:** Upload → Detect format → Load → Split into chunks → Embed
 → Store in ChromaDB → Confirm success in UI.
 
@@ -76,6 +80,8 @@ prompt (system instructions + recent history + retrieved context + question)
 → Call LLM → Return answer → Append turn to chat history.
 
 ## State Diagram
+
+![State Diagram](diagrams/project_state.png)
 
 ```
 [Idle] --upload file--> [Processing Document] --success--> [Indexed]
@@ -88,15 +94,17 @@ prompt (system instructions + recent history + retrieved context + question)
 
 ## Methodology
 
-1. Documents are routed to a format-specific LangChain loader based on file
-   extension.
+1. Documents are routed to a format-specific loader based on file extension:
+   `PyPDFLoader` (PDF), `TextLoader` (TXT), `UnstructuredWordDocumentLoader`
+   (DOCX), and a custom `pandas`-based row-by-row loader (XLSX).
 2. Loaded documents are split using `RecursiveCharacterTextSplitter`
    (chunk size 1000, overlap 200).
 3. Chunks are embedded using a local HuggingFace sentence-transformer model
    (`all-MiniLM-L6-v2`) — no API key required for embeddings.
 4. Embeddings are stored in ChromaDB, persisted to disk so the index survives
-   restarts.
-5. On each question, the top-3 most similar chunks are retrieved and
+   restarts, and accumulate across multiple uploaded documents in the same
+   collection.
+5. On each question, the top-k most similar chunks are retrieved and
    combined with a system prompt that instructs the LLM to answer only from
    the provided context.
 6. The last 5 conversation turns are included in the prompt for multi-turn
@@ -112,7 +120,7 @@ prompt (system instructions + recent history + retrieved context + question)
 | Embeddings              | HuggingFace `all-MiniLM-L6-v2`      |
 | LLM (generation)        | Groq (`llama-3.1-8b-instant`)       |
 | UI                       | Gradio                              |
-| Document parsing         | pypdf, unstructured, docx2txt       |
+| Document parsing         | pypdf, unstructured, docx2txt, pandas (XLSX) |
 
 ## Installation & Execution (PyCharm)
 
@@ -141,10 +149,16 @@ prompt (system instructions + recent history + retrieved context + question)
 
 ## Experimental Results
 
-- Successfully ingested and indexed PDF documents (e.g. a 3-page PDF split
-  into 23 chunks).
-- Retrieval correctly surfaces relevant chunks for topical questions.
-- Generation via Groq returns grounded answers in under ~2 seconds per query.
+- Successfully ingested and indexed documents across all four supported
+  formats (PDF, DOCX, TXT, XLSX), including multiple documents accumulating
+  in the same vector store without overwriting one another.
+- Retrieval correctly surfaces relevant chunks for topical, factual
+  questions, and correctly declines to answer when no relevant context
+  exists (tested against out-of-domain questions).
+- Multi-turn conversational memory verified — follow-up questions referring
+  back to earlier turns (e.g. "when did that happen?") resolve correctly.
+- Generation via Groq returns grounded answers in under ~2 seconds per
+  query.
 
 ## Challenges and Solutions
 
@@ -154,6 +168,8 @@ prompt (system instructions + recent history + retrieved context + question)
 | Vector store object was discarded after creation, so nothing could query it | Refactored `VectorStoreManager` to cache a live `Chroma` instance and expose `as_retriever()` |
 | Local LLM inference (TinyLlama) was too slow on an 8GB RAM laptop | Switched generation to Groq's cloud API, which offloads compute and returns responses in ~1 second |
 | Hugging Face Inference API token permissions caused repeated 401 errors | Avoided the issue entirely by using Groq instead |
+| `unstructured`'s Excel loader flattened whole sheets into one ambiguous chunk, causing the LLM to cross-attribute values between rows (e.g. mixing up which sales rep belonged to which region) | Replaced it with a custom `pandas`-based loader that turns each row into its own explicitly-labeled chunk (`Column: Value \| Column: Value...`) |
+| Naive top-k retrieval occasionally missed the specific chunk needed to answer identity-style questions (e.g. "name her?" about an uploaded resume) | Documented as a known limitation of naive RAG; noted as a candidate use case for Graph RAG in the accompanying Research Manual |
 
 ## Future Improvements
 
@@ -161,6 +177,8 @@ prompt (system instructions + recent history + retrieved context + question)
 - Add source citations in the UI (which document/page an answer came from)
 - Support streaming responses token-by-token in the chat UI
 - Add automated evaluation of retrieval quality (e.g. Ragas)
+- Explore a Graph RAG index for entity-heavy documents to resolve the
+  retrieval-recall limitation noted above
 
 ## References
 
@@ -169,6 +187,13 @@ prompt (system instructions + recent history + retrieved context + question)
 - Groq documentation: https://console.groq.com/docs
 - Gradio documentation: https://www.gradio.app/docs
 
+## Research Manual
+
+See `docs/Research_Manual.pdf` (or `.docx`) for the accompanying technical
+research manual covering Transfer Learning, LLM Fine-Tuning, LoRA, QLoRA,
+Quantization, GPU requirements/optimization, and the Fine-Tuning vs. RAG and
+Naive RAG vs. Graph RAG comparisons (mandatory Task 3 & 4).
+
 ## GitHub Repository
 
-_Add your repository link here after pushing this project._
+https://github.com/zobiarafiq2005-bot/rag-ai-chatbot
