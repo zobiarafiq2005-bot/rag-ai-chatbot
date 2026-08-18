@@ -109,7 +109,8 @@ prompt (system instructions + recent history + retrieved context + question)
    the provided context.
 6. The last 5 conversation turns are included in the prompt for multi-turn
    continuity.
-7. Groq's hosted LLM (`llama-3.1-8b-instant`) generates the final answer.
+7. Groq's hosted LLM (`openai/gpt-oss-20b`) generates the final answer.
+8. Every question and answer is appended to a persistent `conversation_history.jsonl` log on disk, independent of the live UI session. A dedicated "Load Previous Conversation" button (separate from "Clear Chat") lets the user explicitly restore that history into the chat window.
 
 ## Technology Stack
 
@@ -118,7 +119,7 @@ prompt (system instructions + recent history + retrieved context + question)
 | Orchestration          | LangChain                           |
 | Vector Database        | ChromaDB                            |
 | Embeddings              | HuggingFace `all-MiniLM-L6-v2`      |
-| LLM (generation)        | Groq (`llama-3.1-8b-instant`)       |
+| LLM (generation)        | Groq (`openai/gpt-oss-20b`)       |
 | UI                       | Gradio                              |
 | Document parsing         | pypdf, unstructured, docx2txt, pandas (XLSX) |
 
@@ -170,6 +171,10 @@ prompt (system instructions + recent history + retrieved context + question)
 | Hugging Face Inference API token permissions caused repeated 401 errors | Avoided the issue entirely by using Groq instead |
 | `unstructured`'s Excel loader flattened whole sheets into one ambiguous chunk, causing the LLM to cross-attribute values between rows (e.g. mixing up which sales rep belonged to which region) | Replaced it with a custom `pandas`-based loader that turns each row into its own explicitly-labeled chunk (`Column: Value \| Column: Value...`) |
 | Naive top-k retrieval occasionally missed the specific chunk needed to answer identity-style questions (e.g. "name her?" about an uploaded resume) | Documented as a known limitation of naive RAG; noted as a candidate use case for Graph RAG in the accompanying Research Manual |
+| Conversation history was stored only as private internal state on a single, shared `RAGConversationalEngine` instance, so it wasn't truly tied to the UI's per-session state (identified in code review) | Refactored `ask_question()` to accept the session's chat history as an explicit argument, with `app.py` passing Gradio's own per-session state into it on every call — the engine is now stateless and safe for concurrent sessions |
+| Groq deprecated and fully shut down `llama-3.1-8b-instant` (as of Aug 16, 2026), breaking generation with a `404 model_not_found` error | Migrated `DEFAULT_MODEL` to `openai/gpt-oss-20b`, Groq's officially recommended replacement for that tier |
+| Conversation memory existed only in Gradio's live session state — no way to inspect or prove it after the fact, and no record survived closing the app | Added persistent logging: every Q&A turn is appended to `conversation_history.jsonl` on disk (timestamp, query, answer, and how many prior messages were received), independent of the live session |
+| Auto-restoring the visible chat on every page load conflicted with the "Clear Chat Console" button — clearing, then refreshing, silently brought old messages back | Removed automatic reload; added an explicit **"📜 Load Previous Conversation"** button so restoring history is a deliberate user action, not a default that fights with Clear |
 
 ## Future Improvements
 
