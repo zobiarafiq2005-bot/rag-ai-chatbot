@@ -1,4 +1,5 @@
 import os
+import json
 from dotenv import load_dotenv
 
 load_dotenv()  # Reads .env into the environment (HF, Groq keys etc.)
@@ -11,6 +12,37 @@ from src.rag_chain import RAGConversationalEngine
 # Initialize core pipeline components once at startup
 vector_manager = VectorStoreManager()
 rag_engine = RAGConversationalEngine(vector_manager=vector_manager)
+
+CHAT_LOG_PATH = "conversation_history.jsonl"
+MAX_RESTORED_TURNS = 20  # cap how many past exchanges get reloaded into the UI
+
+
+def load_chat_history():
+    """Reads the persistent conversation log and rebuilds the chat display
+    from it, so the visible chat survives a page refresh instead of always
+    starting blank. Note: this log is a single shared file (not tagged per
+    browser session), so on a page reload everyone sees the same restored
+    history — acceptable for local single-user testing, but worth knowing
+    if this app were ever used by multiple people at once."""
+    if not os.path.exists(CHAT_LOG_PATH):
+        return []
+
+    messages = []
+    try:
+        with open(CHAT_LOG_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()[-MAX_RESTORED_TURNS:]
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            messages.append({"role": "user", "content": record.get("query", "")})
+            messages.append({"role": "assistant", "content": record.get("answer", "")})
+    except Exception as e:
+        print(f"[HISTORY RELOAD WARNING] Could not load past chat history: {e}")
+        return []
+
+    return messages
 
 
 def process_file(file):
@@ -34,7 +66,16 @@ def process_file(file):
 
 
 def respond(user_message, chat_history):
-    """Handles a chat turn: retrieve + generate an answer, update history."""
+    """Handles a chat turn: retrieve + generate an answer, update history.
+
+    chat_history is Gradio's own per-session state (a list of
+    {"role": ..., "content": ...} dicts). It is passed into
+    rag_engine.ask_question() BEFORE the current turn is appended, so the
+    engine sees the conversation-so-far and can resolve follow-up questions
+    — this is what actually gives the chatbot conversational memory, tied
+    correctly to each browser session rather than to a single shared engine
+    instance.
+    """
     if not user_message or not user_message.strip():
         return "", chat_history
 
@@ -42,7 +83,7 @@ def respond(user_message, chat_history):
         chat_history = []
 
     try:
-        result = rag_engine.ask_question(user_message)
+        result = rag_engine.ask_question(user_message, history=chat_history)
         bot_message = result["answer"]
     except Exception as e:
         print(f"[CHAT ERROR]: {str(e)}")
@@ -151,10 +192,13 @@ with gr.Blocks(title="RAG Enterprise AI") as demo:
                 )
                 send_btn = gr.Button("Send", variant="primary", scale=1)
 
-            clear = gr.ClearButton([msg, chatbot], value="🗑️ Clear Chat Console")
+            with gr.Row():
+                clear = gr.ClearButton([msg, chatbot], value="🗑️ Clear Chat Console")
+                load_history_btn = gr.Button("📜 Load Previous Conversation")
 
             msg.submit(respond, [msg, chatbot], [msg, chatbot])
             send_btn.click(respond, [msg, chatbot], [msg, chatbot])
+            load_history_btn.click(fn=load_chat_history, outputs=[chatbot])
 
 if __name__ == "__main__":
     demo.launch(theme=gr.themes.Default(primary_hue="blue", neutral_hue="slate"), css=custom_css)
